@@ -14,6 +14,9 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"github.com/hyperledger/fabric-ca/gm"
+	"github.com/zhigui-projects/gmsm/sm2"
+	gmx509 "github.com/zhigui-projects/x509"
 	"io/ioutil"
 	"os"
 	"path"
@@ -51,6 +54,7 @@ import (
 	"github.com/hyperledger/fabric-ca/util"
 	"github.com/hyperledger/fabric/bccsp"
 	"github.com/pkg/errors"
+
 )
 
 const (
@@ -495,7 +499,12 @@ func (ca *CA) VerifyCertificate(cert *x509.Certificate) error {
 	if err != nil {
 		return errors.WithMessage(err, "Failed to get verify options")
 	}
-	_, err = cert.Verify(*opts)
+	_ , isGM := cert.PublicKey.(*sm2.PublicKey)
+	if isGM {
+		_, err = gmx509.X509(gmx509.SM2).Verify(cert,*opts)
+	} else {
+	    _, err = cert.Verify(*opts)
+	}
 	if err != nil {
 		return errors.WithMessage(err, "Failed to verify certificate")
 	}
@@ -523,8 +532,11 @@ func (ca *CA) getVerifyOptions() (*x509.VerifyOptions, error) {
 		if block.Type != "CERTIFICATE" {
 			continue
 		}
-
 		cert, err := x509.ParseCertificate(block.Bytes)
+		if gm.IsGM(){
+			cert, err = gmx509.X509(gmx509.SM2).ParseCertificate(block.Bytes)
+
+		}
 		if err != nil {
 			return nil, errors.Wrap(err, "Failed to parse CA chain certificate")
 		}
@@ -1174,7 +1186,18 @@ func validateMatchingKeys(cert *x509.Certificate, keyFile string) error {
 		if privKey.PublicKey.X.Cmp(pubKey.(*ecdsa.PublicKey).X) != 0 {
 			return errors.New("Public key and private key do not match")
 		}
+	case *sm2.PublicKey:
+		privKey, err :=util.GetSM2PrivateKey(keyPEM)
+		if err != nil {
+			return err
+		}
+
+		if privKey.PublicKey.X.Cmp(pubKey.(*sm2.PublicKey).X) != 0 {
+			return errors.New("Public key and private key do not match")
+		}
+
 	}
+
 
 	return nil
 }

@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/pem"
+	gmx509 "github.com/zhigui-projects/x509"
 	"time"
 
 	"github.com/cloudflare/cfssl/config"
@@ -179,7 +180,11 @@ func processSignRequest(id string, req *signer.SignRequest, ca *CA, ctx *serverR
 		return cferr.Wrap(cferr.CSRError,
 			cferr.BadRequest, errors.New("not a certificate or csr"))
 	}
+
 	csrReq, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		csrReq, err = gmx509.X509(gmx509.SM2).ParseCertificateRequest(block.Bytes)
+	}
 	if err != nil {
 		return err
 	}

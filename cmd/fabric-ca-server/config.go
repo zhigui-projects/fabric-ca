@@ -7,12 +7,14 @@ SPDX-License-Identifier: Apache-2.0
 package main
 
 import (
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/cloudflare/cfssl/log"
+	"github.com/hyperledger/fabric-ca/gm"
 	"github.com/hyperledger/fabric-ca/lib"
 	calog "github.com/hyperledger/fabric-ca/lib/common/log"
 	"github.com/hyperledger/fabric-ca/lib/metadata"
@@ -387,6 +389,8 @@ idemix:
 bccsp:
     default: SW
     sw:
+        algorithm: ECDSA
+#       algorithm: SM2
         hash: SHA2
         security: 256
         filekeystore:
@@ -612,6 +616,19 @@ func (s *ServerCmd) configInit() (err error) {
 	if s.myViper.IsSet(pl) && s.myViper.GetInt(pl) == 0 {
 		s.cfg.CAcfg.Signing.Profiles["ca"].CAConstraint.MaxPathLenZero = true
 	}
+	if s.myViper.GetString("csp.swopts.algorithm") !="" {
+		util.GAlgorithm = s.myViper.GetString("csp.swopts.algorithm")
+	} else{
+	  if  strings.ToUpper(s.myViper.GetString("bccsp.default")) == "SW"{
+	      util.GAlgorithm = strings.ToUpper(s.myViper.GetString("bccsp.sw.algorithm"))
+	  }
+	}
+
+	if strings.Contains(util.GAlgorithm ,"SM2" ) {
+		gm.SetGM(true)
+	}
+
+	fmt.Println(util.GAlgorithm)
 
 	return nil
 }

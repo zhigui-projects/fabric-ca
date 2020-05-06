@@ -114,6 +114,8 @@ func TestInitBCCSP(t *testing.T) {
 
 func TestKeyGenerate(t *testing.T) {
 	t.Run("256", func(t *testing.T) { testKeyGenerate(t, csr.NewBasicKeyRequest(), false) })
+	t.Run("256", func(t *testing.T) { testKeyGenerate(t, &csr.BasicKeyRequest{A: "gmsm2", S: 256}, false) })
+
 	t.Run("384", func(t *testing.T) { testKeyGenerate(t, &csr.BasicKeyRequest{A: "ecdsa", S: 384}, false) })
 	t.Run("521", func(t *testing.T) { testKeyGenerate(t, &csr.BasicKeyRequest{A: "ecdsa", S: 521}, true) })
 	t.Run("521", func(t *testing.T) { testKeyGenerate(t, &csr.BasicKeyRequest{A: "ecdsa", S: 224}, true) })

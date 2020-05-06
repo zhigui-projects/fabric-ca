@@ -35,6 +35,7 @@ var levelPrefix = [...]string{
 	LevelCritical: "CRITICAL",
 	LevelFatal:    "FATAL",
 }
+var IsGM = false
 
 // Level stores the current logging level.
 var Level = LevelInfo

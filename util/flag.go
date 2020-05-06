@@ -60,7 +60,10 @@ func RegisterFlags(v *viper.Viper, flags *pflag.FlagSet, config interface{},
 	tags map[string]string) error {
 	fr := &flagRegistrar{flags: flags, tags: tags, viper: v}
 	return ParseObj(config, fr.Register, tags)
-}
+
+
+	}
+
 
 type flagRegistrar struct {
 	flags *pflag.FlagSet

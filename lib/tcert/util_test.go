@@ -18,6 +18,9 @@ package tcert
 
 import (
 	"crypto/rand"
+	"fmt"
+	"github.com/hyperledger/fabric-ca/gm"
+	"github.com/zhigui-projects/gmsm/sm2"
 	"io/ioutil"
 	"math/big"
 	"testing"
@@ -41,11 +44,59 @@ func TestECCertificate(t *testing.T) {
 	}
 }
 
+func TestGmECCertificate(t *testing.T) {
+	//util.GAlgorithm = "SM2"
+	gm.SetGM(true)
+	defer func() {
+		gm.SetGM(false)
+		//util.GAlgorithm = ""
+	}()
+	publicKeyBuff, err := ioutil.ReadFile("../../testdata/sm2-cert1.pem")
+	if err != nil {
+		t.Fatal("Cannot read GM Certificate from file system")
+	}
+	cert, err := GetCertificate(publicKeyBuff)
+	fmt.Println(cert)
+	if err != nil {
+		t.Fatalf("Cannot create GM Certificate \t [%v]", err)
+	}
+}
+
 func TestCBCPKCS7EncryptCBCPKCS7Decrypt(t *testing.T) {
 
 	// Note: The purpose of this test is not to test AES-256 in CBC mode's strength
 	// ... but rather to verify the code wrapping/unwrapping the cipher.
 	key := make([]byte, AESKeyLength)
+	rand.Reader.Read(key)
+
+	var ptext = []byte("a message with arbitrary length (42 bytes)")
+
+	encrypted, encErr := CBCPKCS7Encrypt(key, ptext)
+	if encErr != nil {
+		t.Fatalf("Error encrypting '%s': %s", ptext, encErr)
+	}
+
+	decrypted, dErr := CBCPKCS7Decrypt(key, encrypted)
+	if dErr != nil {
+		t.Fatalf("Error decrypting the encrypted '%s': %v", ptext, dErr)
+	}
+
+	if string(ptext[:]) != string(decrypted[:]) {
+		t.Fatal("Decrypt( Encrypt( ptext ) ) != ptext: Ciphertext decryption with the same key must result in the original plaintext!")
+	}
+
+}
+
+func TestGmCBCPKCS7EncryptCBCPKCS7Decrypt(t *testing.T) {
+	//util.GAlgorithm = "SM2"
+	gm.SetGM(true)
+	defer func() {
+		//util.GAlgorithm = ""
+		gm.SetGM(false)
+	}()
+	// Note: The purpose of this test is not to test AES-256 in CBC mode's strength
+	// ... but rather to verify the code wrapping/unwrapping the cipher.
+	key := make([]byte, SM4KeyLength)
 	rand.Reader.Read(key)
 
 	var ptext = []byte("a message with arbitrary length (42 bytes)")
@@ -149,6 +200,13 @@ func TestDerToPem(t *testing.T) {
 		t.Fatal("Failed to ConvertDERToPEM")
 	}
 }
+func TestSM2ReadKey(t *testing.T){
+
+	_, err := sm2.ReadPrivateKeyFromPem("../../testdata/sm2-key1.pem", nil)
+	if err !=nil{
+		t.Errorf(err.Error())
+	}
+}
 
 func TestGetPrivateKey(t *testing.T) {
 	// PKCS1 EC
@@ -156,7 +214,11 @@ func TestGetPrivateKey(t *testing.T) {
 	if err != nil {
 		t.Errorf("Cannot load PKCS1 EC Key: %v", err)
 	}
-
+	//sm2
+	_, err = LoadKey("../../testdata/sm2-key1.pem")
+	if err != nil {
+		t.Errorf("Cannot load SM2 Key: %v", err)
+	}
 	// PKCS1 RSA
 	_, err = LoadKey("../../testdata/rsa-key.pem")
 	if err != nil {

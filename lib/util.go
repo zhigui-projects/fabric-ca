@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	gmx509 "github.com/zhigui-projects/x509"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -34,6 +35,33 @@ var clientAuthTypes = map[string]tls.ClientAuthType{
 	"requireandverifyclientcert": tls.RequireAndVerifyClientCert,
 }
 
+//uses raplace CertPool AppendCertsFromPEM method
+func  AppendCertsFromPEM(s *x509.CertPool, pemCerts []byte) (ok bool) {
+	for len(pemCerts) > 0 {
+		var block *pem.Block
+		block, pemCerts = pem.Decode(pemCerts)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+			continue
+		}
+
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			cert, err = gmx509.X509(gmx509.SM2).ParseCertificate(block.Bytes)
+		}
+		if err != nil {
+			continue
+		}
+
+		s.AddCert(cert)
+		ok = true
+	}
+
+	return
+}
+
 // GetCertID returns both the serial number and AKI (Authority Key ID) for the certificate
 func GetCertID(bytes []byte) (string, string, error) {
 	cert, err := BytesToX509Cert(bytes)
@@ -53,6 +81,9 @@ func BytesToX509Cert(bytes []byte) (*x509.Certificate, error) {
 	}
 	cert, err := x509.ParseCertificate(bytes)
 	if err != nil {
+		cert, err = gmx509.X509(gmx509.SM2).ParseCertificate(bytes)
+	}
+	if err != nil {
 		return nil, errors.Wrap(err, "Buffer was neither PEM nor DER encoding")
 	}
 	return cert, err
@@ -71,7 +102,8 @@ func LoadPEMCertPool(certFiles []string) (*x509.CertPool, error) {
 			}
 
 			log.Debugf("Appending cert %s to pool", cert)
-			if !certPool.AppendCertsFromPEM(pemCerts) {
+			//if !certPool.AppendCertsFromPEM(pemCerts) {
+			if !AppendCertsFromPEM(certPool, pemCerts){
 				return nil, errors.New("Failed to load cert pool")
 			}
 		}
@@ -79,6 +111,7 @@ func LoadPEMCertPool(certFiles []string) (*x509.CertPool, error) {
 
 	return certPool, nil
 }
+
 
 // UnmarshalConfig unmarshals a configuration file
 func UnmarshalConfig(config interface{}, vp *viper.Viper, configFile string,
@@ -195,6 +228,9 @@ func (cd *CertificateDecoder) CertificateDecoder(decoder *json.Decoder) error {
 		return errors.New("Certificate decoding error")
 	}
 	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		certificate, err = gmx509.X509(gmx509.SM2).ParseCertificate(block.Bytes)
+	}
 	if err != nil {
 		return err
 	}

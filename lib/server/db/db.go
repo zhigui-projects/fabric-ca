@@ -136,6 +136,7 @@ func (db *DB) NamedExec(funcName, query string, args interface{}) (sql.Result, e
 // Get executes query
 func (db *DB) Get(funcName string, dest interface{}, query string, args ...interface{}) error {
 	startTime := time.Now()
+//	db.DB.Get(dest,"select * from users",args)
 	err := db.DB.Get(dest, query, args...)
 	db.recordMetric(startTime, funcName, "Get")
 	return err

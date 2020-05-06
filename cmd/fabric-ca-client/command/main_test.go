@@ -14,6 +14,8 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/hyperledger/fabric-ca/gm"
+	gmx509 "github.com/zhigui-projects/x509"
 	"io"
 	"io/ioutil"
 	"math/big"
@@ -1177,6 +1179,7 @@ func TestDifferentKeySizeAlgos(t *testing.T) {
 	}
 
 	// Test enroll with ecdsa algorithm and 384 key size
+	writeConfig("wg","gmsm2",256,homeDir)
 	srv := setupGenCSRTest(t, homeDir)
 	defer stopAndCleanupServer(t, srv)
 
@@ -1195,8 +1198,13 @@ func TestDifferentKeySizeAlgos(t *testing.T) {
 		t.Errorf("Block type read from the cert file is not of type certificate")
 	}
 	cert, perr1 := x509.ParseCertificate(block.Bytes)
+	if perr1 != nil {
+		cert , perr1 = gmx509.X509(gmx509.SM2).ParseCertificate(block.Bytes)
+	}
 	assert.NoError(t, perr1, "Failed to parse enrollment certificate")
-	assert.Equal(t, x509.ECDSAWithSHA384, cert.SignatureAlgorithm, "Not expected signature algorithm in the ecert")
+	assert.Equal(t, gmx509.SM2WithSM3, cert.SignatureAlgorithm, "Not expected signature algorithm in the ecert")
+
+	//	assert.Equal(t, x509.ECDSAWithSHA384, cert.SignatureAlgorithm, "Not expected signature algorithm in the ecert")
 }
 
 // TestMOption tests to make sure that the key is stored in the correct
@@ -2555,10 +2563,11 @@ func setupGenCSRTest(t *testing.T, adminHome string) *lib.Server {
 	if err != nil {
 		t.Fatalf("Failed to remove home directory %s: %s", srvHome, err)
 	}
-
+    gm.SetGM(true)
+	//defer gm.SetGM(false)
 	srv := lib.TestGetServer(serverPort, srvHome, "", -1, t)
 	srv.Config.Debug = true
-	srv.CA.Config.CSR.KeyRequest = &api.BasicKeyRequest{Algo: "ecdsa", Size: 384}
+	srv.CA.Config.CSR.KeyRequest = &api.BasicKeyRequest{Algo: "gmsm2", Size: 256}
 
 	adminName := "admin"
 	adminPass := "adminpw"

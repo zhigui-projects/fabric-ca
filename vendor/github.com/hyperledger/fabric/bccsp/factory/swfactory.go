@@ -44,18 +44,17 @@ func (f *SWFactory) Get(config *FactoryOpts) (bccsp.BCCSP, error) {
 	swOpts := config.SwOpts
 
 	var ks bccsp.KeyStore
-	switch {
-	case swOpts.Ephemeral:
+	if swOpts.Ephemeral == true {
 		ks = sw.NewDummyKeyStore()
-	case swOpts.FileKeystore != nil:
+	} else if swOpts.FileKeystore != nil {
 		fks, err := sw.NewFileBasedKeyStore(nil, swOpts.FileKeystore.KeyStorePath, false)
 		if err != nil {
 			return nil, errors.Wrapf(err, "Failed to initialize software key store")
 		}
 		ks = fks
-	case swOpts.InmemKeystore != nil:
+	} else if swOpts.InmemKeystore != nil {
 		ks = sw.NewInMemoryKeyStore()
-	default:
+	} else {
 		// Default to ephemeral key store
 		ks = sw.NewDummyKeyStore()
 	}
@@ -66,6 +65,8 @@ func (f *SWFactory) Get(config *FactoryOpts) (bccsp.BCCSP, error) {
 // SwOpts contains options for the SWFactory
 type SwOpts struct {
 	// Default algorithms when not specified (Deprecated?)
+	Algorithm string `mapstructure:"algorithm" json:"algorithm" yaml:"Algorithm"`
+
 	SecLevel   int    `mapstructure:"security" json:"security" yaml:"Security"`
 	HashFamily string `mapstructure:"hash" json:"hash" yaml:"Hash"`
 

@@ -45,6 +45,8 @@ import (
 	"github.com/pkg/errors"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
+	"github.com/zhigui-projects/gmsm/sm2"
+	gmx509 "github.com/zhigui-projects/x509"
 	"golang.org/x/crypto/ocsp"
 )
 
@@ -52,6 +54,7 @@ var (
 	rnd = mrand.NewSource(time.Now().UnixNano())
 	// ErrNotImplemented used to return errors for functions not implemented
 	ErrNotImplemented = errors.New("NOT YET IMPLEMENTED")
+	GAlgorithm = "ECDSA"
 )
 
 const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -196,12 +199,16 @@ func CreateToken(csp bccsp.BCCSP, cert []byte, key bccsp.Key, method, uri string
 				return "", err
 			}
 	*/
+
 	case *ecdsa.PublicKey:
 		token, err = GenECDSAToken(csp, cert, key, method, uri, body)
 		if err != nil {
 			return "", err
 		}
+	case *sm2.PublicKey:
+		token, err = GenSM2Token(csp, cert, key, method, uri, body)
 	}
+
 	return token, nil
 }
 
@@ -229,7 +236,36 @@ func GenRSAToken(csp bccsp.BCCSP, cert []byte, key []byte, body []byte) (string,
 	return  token, nil
 }
 */
+//GenECDSAToken signs the http body and cert with SM2
+func GenSM2Token(csp bccsp.BCCSP, cert []byte, key bccsp.Key, method, uri string, body []byte) (string, error) {
+	b64body := B64Encode(body)
+	b64cert := B64Encode(cert)
+	b64uri := B64Encode([]byte(uri))
+	payload := method + "." + b64uri + "." + b64body + "." + b64cert
 
+	return genSM2Token(csp, key, b64cert, payload)
+}
+
+func genSM2Token(csp bccsp.BCCSP, key bccsp.Key, b64cert, payload string) (string, error) {
+	digest, digestError := csp.Hash([]byte(payload), &bccsp.GMSM3Opts{})
+	if digestError != nil {
+		return "", errors.WithMessage(digestError, fmt.Sprintf("Hash failed on '%s'", payload))
+	}
+
+	sm2Signature, err := csp.Sign(key, digest,nil)
+	if err != nil {
+		return "", errors.WithMessage(err, "BCCSP signature generation failure")
+	}
+	if len(sm2Signature) == 0 {
+		return "", errors.New("BCCSP signature creation failed. Signature must be different than nil")
+	}
+
+	b64sig := B64Encode(sm2Signature)
+	token := b64cert + "." + b64sig
+
+	return token, nil
+
+}
 //GenECDSAToken signs the http body and cert with ECDSA using EC private key
 func GenECDSAToken(csp bccsp.BCCSP, cert []byte, key bccsp.Key, method, uri string, body []byte) (string, error) {
 	b64body := B64Encode(body)
@@ -272,6 +308,7 @@ func VerifyToken(csp bccsp.BCCSP, token string, method, uri string, body []byte,
 	if err != nil {
 		return nil, err
 	}
+	_, isSm2 := x509Cert.PublicKey.(*sm2.PublicKey)
 	sig, err := B64Decode(b64Sig)
 	if err != nil {
 		return nil, errors.WithMessage(err, "Invalid base64 encoded signature in token")
@@ -290,7 +327,12 @@ func VerifyToken(csp bccsp.BCCSP, token string, method, uri string, body []byte,
 
 	//bccsp.X509PublicKeyImportOpts
 	//Using default hash algo
+
 	digest, digestError := csp.Hash([]byte(sigString), &bccsp.SHAOpts{})
+    //if GAlgorithm == "SM2" {
+	if isSm2{
+		digest, digestError = csp.Hash([]byte(sigString), &bccsp.GMSM3Opts{})
+	}
 	if digestError != nil {
 		return nil, errors.WithMessage(digestError, "Message digest failed")
 	}
@@ -299,7 +341,11 @@ func VerifyToken(csp bccsp.BCCSP, token string, method, uri string, body []byte,
 	if compMode1_3 && !valid {
 		log.Debugf("Failed to verify token based on new authentication header requirements: %s", err)
 		sigString := b64Body + "." + b64Cert
-		digest, digestError := csp.Hash([]byte(sigString), &bccsp.SHAOpts{})
+		digest, digestError = csp.Hash([]byte(sigString), &bccsp.SHAOpts{})
+		//if GAlgorithm == "SM2" {
+		if isSm2{
+			digest, digestError = csp.Hash([]byte(sigString), &bccsp.GMSM3Opts{})
+		}
 		if digestError != nil {
 			return nil, errors.WithMessage(digestError, "Message digest failed")
 		}
@@ -336,6 +382,33 @@ func DecodeToken(token string) (*x509.Certificate, string, string, error) {
 	}
 	return x509Cert, b64cert, parts[1], nil
 }
+
+//GetSM2PrivateKey get *ecdsa.PrivateKey from key pem
+//func GetSM2PrivateKey(raw []byte) (*sm2.PrivateKey, error) {
+//	decoded, _ := pem.Decode(raw)
+//	if decoded == nil {
+//		return nil, errors.New("Failed to decode the PEM-encoded ECDSA key")
+//	}
+//	SM2privKey, err := gmx509.ParseECPrivateKey(decoded.Bytes)    //x509.ParseECPrivateKey(decoded.Bytes)
+//	if err == nil {
+//		return SM2privKey, nil
+//	}
+//
+//	return nil, errors.Wrap(err, "Failed parsing EC private key")
+//}
+
+func GetSM2PrivateKey(raw []byte) (*sm2.PrivateKey, error) {
+	decoded, _ := pem.Decode(raw)
+	if decoded == nil {
+		return nil, errors.New("Failed to decode the PEM-encoded RSA key")
+	}
+	if key, err := sm2.ParsePKCS8UnecryptedPrivateKey(decoded.Bytes); err == nil {
+		return key, nil
+	} else {
+		return nil, fmt.Errorf("tls: failed to parse private key %v", err)
+	}
+}
+
 
 //GetECPrivateKey get *ecdsa.PrivateKey from key pem
 func GetECPrivateKey(raw []byte) (*ecdsa.PrivateKey, error) {
@@ -505,7 +578,13 @@ func GetX509CertificateFromPEM(cert []byte) (*x509.Certificate, error) {
 	if block == nil {
 		return nil, errors.New("Failed to PEM decode certificate")
 	}
+
 	x509Cert, err := x509.ParseCertificate(block.Bytes)
+	//if GAlgorithm == "SM2" {
+	if err != nil {
+		x509Cert, err = gmx509.X509(gmx509.SM2).ParseCertificate(block.Bytes)
+	}
+	//gmx509.ParseCertificate()
 	if err != nil {
 		return nil, errors.Wrap(err, "Error parsing certificate")
 	}
@@ -524,6 +603,12 @@ func GetX509CertificatesFromPEM(pemBytes []byte) ([]*x509.Certificate, error) {
 		}
 
 		cert, err := x509.ParseCertificate(block.Bytes)
+		//if GAlgorithm == "SM2" {
+		//if gm.IsGM(){
+		if err != nil {
+			cert, err = gmx509.X509(gmx509.SM2).ParseCertificate(block.Bytes)
+		}
+
 		if err != nil {
 			return nil, errors.Wrap(err, "Error parsing certificate")
 		}

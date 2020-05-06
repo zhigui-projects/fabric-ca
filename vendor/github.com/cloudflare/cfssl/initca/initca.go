@@ -17,6 +17,7 @@ import (
 	"github.com/cloudflare/cfssl/log"
 	"github.com/cloudflare/cfssl/signer"
 	"github.com/cloudflare/cfssl/signer/local"
+	"github.com/zhigui-projects/gmsm/sm2"
 )
 
 // validator contains the default validation logic for certificate
@@ -178,6 +179,7 @@ func RenewFromSigner(ca *x509.Certificate, priv crypto.Signer) ([]byte, error) {
 	}
 
 	// matching certificate public key vs private key
+    //x509.RSA
 	switch {
 	case ca.PublicKeyAlgorithm == x509.RSA:
 
@@ -190,14 +192,31 @@ func RenewFromSigner(ca *x509.Certificate, priv crypto.Signer) ([]byte, error) {
 			return nil, cferr.New(cferr.PrivateKeyError, cferr.KeyMismatch)
 		}
 	case ca.PublicKeyAlgorithm == x509.ECDSA:
+
 		var ecdsaPublicKey *ecdsa.PublicKey
-		var ok bool
-		if ecdsaPublicKey, ok = priv.Public().(*ecdsa.PublicKey); !ok {
+		var sm2PublicKey *sm2.PublicKey
+
+		switch priv.Public().(type) {
+		case *ecdsa.PublicKey:
+			ecdsaPublicKey = priv.Public().(*ecdsa.PublicKey)
+			if ca.PublicKey.(*ecdsa.PublicKey).X.Cmp(ecdsaPublicKey.X) != 0 {
+				return nil, cferr.New(cferr.PrivateKeyError, cferr.KeyMismatch)
+			}
+		case *sm2.PublicKey:
+			sm2PublicKey = priv.Public().(*sm2.PublicKey)
+			if ca.PublicKey.(*sm2.PublicKey).X.Cmp(sm2PublicKey.X) != 0 {
+				return nil, cferr.New(cferr.PrivateKeyError, cferr.KeyMismatch)
+			}
+		default:
 			return nil, cferr.New(cferr.PrivateKeyError, cferr.KeyMismatch)
+
 		}
-		if ca.PublicKey.(*ecdsa.PublicKey).X.Cmp(ecdsaPublicKey.X) != 0 {
-			return nil, cferr.New(cferr.PrivateKeyError, cferr.KeyMismatch)
-		}
+		//if ecdsaPublicKey, ok = priv.Public().(*ecdsa.PublicKey); !ok {
+		//	return nil, cferr.New(cferr.PrivateKeyError, cferr.KeyMismatch)
+		//}
+		//if ca.PublicKey.(*ecdsa.PublicKey).X.Cmp(ecdsaPublicKey.X) != 0 {
+		//	return nil, cferr.New(cferr.PrivateKeyError, cferr.KeyMismatch)
+		//}
 	default:
 		return nil, cferr.New(cferr.PrivateKeyError, cferr.NotRSAOrECC)
 	}

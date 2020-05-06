@@ -19,6 +19,8 @@ package tls
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
+	gmx509 "github.com/zhigui-projects/x509"
 	"io/ioutil"
 	"time"
 
@@ -66,6 +68,33 @@ type KeyCertFiles struct {
 	CertFile string `help:"PEM-encoded certificate file when mutual authenticate is enabled"`
 }
 
+//uses raplace CertPool AppendCertsFromPEM method
+func  AppendCertsFromPEM(s *x509.CertPool, pemCerts []byte) (ok bool) {
+	for len(pemCerts) > 0 {
+		var block *pem.Block
+		block, pemCerts = pem.Decode(pemCerts)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+			continue
+		}
+
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			cert, err = gmx509.X509(gmx509.SM2).ParseCertificate(block.Bytes)
+		}
+		if err != nil {
+			continue
+		}
+
+		s.AddCert(cert)
+		ok = true
+	}
+
+	return
+}
+
 // GetClientTLSConfig creates a tls.Config object from certs and roots
 func GetClientTLSConfig(cfg *ClientTLSConfig, csp bccsp.BCCSP) (*tls.Config, error) {
 	var certs []tls.Certificate
@@ -103,7 +132,8 @@ func GetClientTLSConfig(cfg *ClientTLSConfig, csp bccsp.BCCSP) (*tls.Config, err
 		if err != nil {
 			return nil, errors.Wrapf(err, "Failed to read '%s'", cacert)
 		}
-		ok := rootCAPool.AppendCertsFromPEM(caCert)
+		//ok := rootCAPool.AppendCertsFromPEM(caCert)
+		ok := AppendCertsFromPEM(rootCAPool, caCert)
 		if !ok {
 			return nil, errors.Errorf("Failed to process certificate from file %s", cacert)
 		}

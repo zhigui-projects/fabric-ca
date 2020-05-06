@@ -26,6 +26,11 @@ import (
 	"encoding/asn1"
 	"encoding/base64"
 	"fmt"
+	"github.com/hyperledger/fabric-ca/gm"
+	"github.com/zhigui-projects/gmsm/sm2"
+	"github.com/zhigui-projects/gmsm/sm3"
+	gmx509 "github.com/zhigui-projects/x509"
+	"hash"
 	"math/big"
 	"strconv"
 	"time"
@@ -146,69 +151,135 @@ func (tm *Mgr) GetBatch(req *GetTCertBatchRequest, ecert *x509.Certificate) (*ap
 	// Generate nonce for TCertIndex
 	nonce := make([]byte, 16) // 8 bytes rand, 8 bytes timestamp
 	rand.Reader.Read(nonce[:8])
-
-	pub := ecert.PublicKey.(*ecdsa.PublicKey)
-
-	mac := hmac.New(sha512.New384, []byte(createHMACKey()))
-	raw, _ := x509.MarshalPKIXPublicKey(pub)
-	mac.Write(raw)
-	kdfKey := mac.Sum(nil)
-
+	var mac hash.Hash
+//	var pub *ecdsa.PublicKey
+//	var gmpub *sm2.PublicKey
+    var kdfKey []byte
 	var set []api.TCert
+	switch pub :=ecert.PublicKey.(type) {
+	case *ecdsa.PublicKey:
+		mac = hmac.New(sha512.New384, []byte(createHMACKey()))
+		raw, _ := x509.MarshalPKIXPublicKey(pub)
+		mac.Write(raw)
+		kdfKey := mac.Sum(nil)
+		for i := 0; i < numTCertsInBatch; i++ {
+			tcertid, uuidError := GenerateIntUUID()
+			if uuidError != nil {
+				return nil, fmt.Errorf("Failure generating UUID: %s", uuidError)
+			}
+			// Compute TCertIndex
+			tidx := []byte(strconv.Itoa(2*i + 1))
+			tidx = append(tidx[:], nonce[:]...)
+			tidx = append(tidx[:], Padding...)
 
-	for i := 0; i < numTCertsInBatch; i++ {
-		tcertid, uuidError := GenerateIntUUID()
-		if uuidError != nil {
-			return nil, fmt.Errorf("Failure generating UUID: %s", uuidError)
+			var mac hash.Hash
+			mac = hmac.New(sha512.New384, kdfKey)
+			mac.Write([]byte{1})
+			extKey := mac.Sum(nil)[:32]
+			mac = hmac.New(sha512.New384, kdfKey)
+			mac.Write([]byte{2})
+			mac = hmac.New(sha512.New384, mac.Sum(nil))
+			mac.Write(tidx)
+			one := new(big.Int).SetInt64(1)
+			k := new(big.Int).SetBytes(mac.Sum(nil))
+			k.Mod(k, new(big.Int).Sub(pub.Curve.Params().N, one))
+			k.Add(k, one)
+
+			tmpX, tmpY := pub.ScalarBaseMult(k.Bytes())
+			txX, txY := pub.Curve.Add(pub.X, pub.Y, tmpX, tmpY)
+			txPub := ecdsa.PublicKey{Curve: pub.Curve, X: txX, Y: txY}
+
+			// Compute encrypted TCertIndex
+			encryptedTidx, encryptErr := CBCPKCS7Encrypt(extKey, tidx)
+			if encryptErr != nil {
+				return nil, encryptErr
+			}
+
+			extensions, ks, extensionErr := generateExtensions(tcertid, encryptedTidx, ecert, req)
+
+			if extensionErr != nil {
+				return nil, extensionErr
+			}
+
+			template.PublicKey = txPub
+			template.Extensions = extensions
+			template.ExtraExtensions = extensions
+			template.SerialNumber = tcertid
+
+			var raw []byte
+			var err error
+			raw, err = x509.CreateCertificate(rand.Reader, template, tm.CACert, &txPub, tm.CAKey)
+			if err != nil {
+				return nil, fmt.Errorf("Failed in TCert x509.CreateCertificate: %s", err)
+			}
+
+			pem := ConvertDERToPEM(raw, "CERTIFICATE")
+
+			set = append(set, api.TCert{Cert: pem, Keys: ks})
 		}
-		// Compute TCertIndex
-		tidx := []byte(strconv.Itoa(2*i + 1))
-		tidx = append(tidx[:], nonce[:]...)
-		tidx = append(tidx[:], Padding...)
+	case *sm2.PublicKey:
+		mac = hmac.New(sm3.New,[]byte(createHMACKey()))
+		raw, _ := gmx509.X509(gmx509.SM2).MarshalPKIXPublicKey(pub)
+		mac.Write(raw)
+		kdfKey = mac.Sum(nil)
+		for i := 0; i < numTCertsInBatch; i++ {
+			tcertid, uuidError := GenerateIntUUID()
+			if uuidError != nil {
+				return nil, fmt.Errorf("Failure generating UUID: %s", uuidError)
+			}
+			// Compute TCertIndex
+			tidx := []byte(strconv.Itoa(2*i + 1))
+			tidx = append(tidx[:], nonce[:]...)
+			tidx = append(tidx[:], Padding...)
 
-		mac := hmac.New(sha512.New384, kdfKey)
-		mac.Write([]byte{1})
-		extKey := mac.Sum(nil)[:32]
+			var mac hash.Hash
+			mac = hmac.New(sm3.New,kdfKey)
+			mac.Write([]byte{1})
+			extKey := mac.Sum(nil)[:32]
 
-		mac = hmac.New(sha512.New384, kdfKey)
-		mac.Write([]byte{2})
-		mac = hmac.New(sha512.New384, mac.Sum(nil))
-		mac.Write(tidx)
+			mac = hmac.New(sm3.New,kdfKey)
+			mac.Write([]byte{2})
+			mac = hmac.New(sm3.New,mac.Sum(nil))
+			mac.Write(tidx)
 
-		one := new(big.Int).SetInt64(1)
-		k := new(big.Int).SetBytes(mac.Sum(nil))
-		k.Mod(k, new(big.Int).Sub(pub.Curve.Params().N, one))
-		k.Add(k, one)
+			one := new(big.Int).SetInt64(1)
+			k := new(big.Int).SetBytes(mac.Sum(nil))
+			k.Mod(k, new(big.Int).Sub(pub.Curve.Params().N, one))
+			k.Add(k, one)
 
-		tmpX, tmpY := pub.ScalarBaseMult(k.Bytes())
-		txX, txY := pub.Curve.Add(pub.X, pub.Y, tmpX, tmpY)
-		txPub := ecdsa.PublicKey{Curve: pub.Curve, X: txX, Y: txY}
+			tmpX, tmpY := pub.ScalarBaseMult(k.Bytes())
+			txX, txY := pub.Curve.Add(pub.X, pub.Y, tmpX, tmpY)
+			txPub := sm2.PublicKey{Curve: pub.Curve, X: txX, Y: txY}
 
-		// Compute encrypted TCertIndex
-		encryptedTidx, encryptErr := CBCPKCS7Encrypt(extKey, tidx)
-		if encryptErr != nil {
-			return nil, encryptErr
+			// Compute encrypted TCertIndex
+			encryptedTidx, encryptErr := CBCPKCS7Encrypt(extKey, tidx)
+			if encryptErr != nil {
+				return nil, encryptErr
+			}
+
+			extensions, ks, extensionErr := generateExtensions(tcertid, encryptedTidx, ecert, req)
+
+			if extensionErr != nil {
+				return nil, extensionErr
+			}
+
+			template.PublicKey = txPub
+			template.Extensions = extensions
+			template.ExtraExtensions = extensions
+			template.SerialNumber = tcertid
+
+			var raw []byte
+			var err error
+			raw, err = gmx509.X509(gmx509.SM2).CreateCertificate(rand.Reader, template, tm.CACert, &txPub, tm.CAKey)
+			if err != nil {
+				return nil, fmt.Errorf("Failed in TCert x509.CreateCertificate: %s", err)
+			}
+
+			pem := ConvertDERToPEM(raw, "CERTIFICATE")
+
+			set = append(set, api.TCert{Cert: pem, Keys: ks})
 		}
 
-		extensions, ks, extensionErr := generateExtensions(tcertid, encryptedTidx, ecert, req)
-
-		if extensionErr != nil {
-			return nil, extensionErr
-		}
-
-		template.PublicKey = txPub
-		template.Extensions = extensions
-		template.ExtraExtensions = extensions
-		template.SerialNumber = tcertid
-
-		raw, err := x509.CreateCertificate(rand.Reader, template, tm.CACert, &txPub, tm.CAKey)
-		if err != nil {
-			return nil, fmt.Errorf("Failed in TCert x509.CreateCertificate: %s", err)
-		}
-
-		pem := ConvertDERToPEM(raw, "CERTIFICATE")
-
-		set = append(set, api.TCert{Cert: pem, Keys: ks})
 	}
 
 	tcertID, randNumErr := GenNumber(big.NewInt(20))
@@ -246,12 +317,23 @@ func generateExtensions(tcertid *big.Int, tidx []byte, enrollmentCert *x509.Cert
 	extensions := make([]pkix.Extension, len(attrs))
 
 	preK1 := batchRequest.PreKey
-	mac := hmac.New(sha512.New384, []byte(preK1))
+	var mac hash.Hash
+	if gm.IsGM(){
+		mac = hmac.New(sm3.New, []byte(preK1))
+	} else {
+		mac = hmac.New(sha512.New384,  []byte(preK1))
+	}
+
+//	mac := hmac.New(sha512.New384, []byte(preK1))
 	mac.Write(tcertid.Bytes())
 	preK0 := mac.Sum(nil)
 
 	// Compute encrypted EnrollmentID
-	mac = hmac.New(sha512.New384, preK0)
+	if gm.IsGM(){
+		mac = hmac.New(sm3.New, preK0)
+	} else {
+	    mac = hmac.New(sha512.New384, preK0)
+	}
 	mac.Write([]byte("enrollmentID"))
 	enrollmentIDKey := mac.Sum(nil)[:32]
 
@@ -281,7 +363,11 @@ func generateExtensions(tcertid *big.Int, tidx []byte, enrollmentCert *x509.Cert
 
 		// Encrypt attribute if enabled
 		if batchRequest.EncryptAttrs {
-			mac = hmac.New(sha512.New384, preK0)
+			if gm.IsGM(){
+				mac = hmac.New(sm3.New, preK0)
+			} else {
+			    mac = hmac.New(sha512.New384, preK0)
+			}
 			mac.Write([]byte(name))
 			attributeKey := mac.Sum(nil)[:32]
 

@@ -19,6 +19,8 @@ import (
 	cferr "github.com/cloudflare/cfssl/errors"
 	"github.com/cloudflare/cfssl/helpers"
 	"github.com/cloudflare/cfssl/log"
+	"github.com/zhigui-projects/gmsm/sm2"
+	gmx509 "github.com/zhigui-projects/x509"
 )
 
 const (
@@ -92,6 +94,8 @@ func (kr *BasicKeyRequest) Generate() (crypto.PrivateKey, error) {
 			return nil, errors.New("invalid curve")
 		}
 		return ecdsa.GenerateKey(curve, rand.Reader)
+	case "gmsm2", "GMSM2":
+		return sm2.GenerateKey()
 	default:
 		return nil, errors.New("invalid algorithm")
 	}
@@ -123,6 +127,8 @@ func (kr *BasicKeyRequest) SigAlgo() x509.SignatureAlgorithm {
 		default:
 			return x509.ECDSAWithSHA1
 		}
+	case "gmsm2", "GMSM2":
+		return gmx509.SM2WithSM3
 	default:
 		return x509.UnknownSignatureAlgorithm
 	}
@@ -218,6 +224,17 @@ func ParseRequest(req *CertificateRequest) (csr, key []byte, err error) {
 		}
 		block := pem.Block{
 			Type:  "EC PRIVATE KEY",
+			Bytes: key,
+		}
+		key = pem.EncodeToMemory(&block)
+	case *sm2.PrivateKey:
+		key, err = sm2.MarshalSm2PrivateKey(priv,nil)
+		if err != nil {
+			err = cferr.Wrap(cferr.PrivateKeyError, cferr.Unknown, err)
+			return
+		}
+		block := pem.Block{
+			Type:  "SM2 PRIVATE KEY",
 			Bytes: key,
 		}
 		key = pem.EncodeToMemory(&block)
@@ -356,7 +373,10 @@ func Regenerate(priv crypto.Signer, csr []byte) ([]byte, error) {
 	} else if len(extra) > 0 {
 		return nil, errors.New("csr: trailing data in certificate request")
 	}
-
+	switch  priv.Public().(type) {
+	case *sm2.PublicKey:
+		return gmx509.X509(gmx509.SM2).CreateCertificateRequest(rand.Reader, req, priv)
+	}
 	return x509.CreateCertificateRequest(rand.Reader, req, priv)
 }
 
@@ -390,8 +410,11 @@ func Generate(priv crypto.Signer, req *CertificateRequest) (csr []byte, err erro
 			return
 		}
 	}
-
-	csr, err = x509.CreateCertificateRequest(rand.Reader, &tpl, priv)
+	if _,ok := priv.Public().(*sm2.PublicKey);ok{
+		csr, err = gmx509.X509(gmx509.SM2).CreateCertificateRequest(rand.Reader, &tpl, priv)
+	} else {
+	    csr, err = x509.CreateCertificateRequest(rand.Reader, &tpl, priv)
+	}
 	if err != nil {
 		log.Errorf("failed to generate a CSR: %v", err)
 		err = cferr.Wrap(cferr.CSRError, cferr.BadRequest, err)

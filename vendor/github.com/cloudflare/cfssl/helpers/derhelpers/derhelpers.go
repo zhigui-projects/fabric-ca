@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 
 	cferr "github.com/cloudflare/cfssl/errors"
+	"github.com/zhigui-projects/gmsm/sm2"
 )
 
 // ParsePrivateKeyDER parses a PKCS #1, PKCS #8, or elliptic curve
@@ -20,12 +21,15 @@ func ParsePrivateKeyDER(keyDER []byte) (key crypto.Signer, err error) {
 		if err != nil {
 			generalKey, err = x509.ParseECPrivateKey(keyDER)
 			if err != nil {
-				// We don't include the actual error into
-				// the final error. The reason might be
-				// we don't want to leak any info about
-				// the private key.
-				return nil, cferr.New(cferr.PrivateKeyError,
-					cferr.ParseFailed)
+				generalKey, err = sm2.ParseSm2PrivateKey(keyDER)
+				if err !=nil {
+					// We don't include the actual error into
+					// the final error. The reason might be
+					// we don't want to leak any info about
+					// the private key.
+					return nil, cferr.New(cferr.PrivateKeyError,
+						cferr.ParseFailed)
+				}
 			}
 		}
 	}
@@ -35,6 +39,8 @@ func ParsePrivateKeyDER(keyDER []byte) (key crypto.Signer, err error) {
 		return generalKey.(*rsa.PrivateKey), nil
 	case *ecdsa.PrivateKey:
 		return generalKey.(*ecdsa.PrivateKey), nil
+	case *sm2.PrivateKey:
+		return generalKey.(*sm2.PrivateKey),nil
 	}
 
 	// should never reach here

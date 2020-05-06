@@ -24,6 +24,7 @@ import (
 	"fmt"
 
 	"github.com/hyperledger/fabric/bccsp"
+	"github.com/zhigui-projects/gmsm/sm2"
 )
 
 type ecdsaKeyGenerator struct {
@@ -64,4 +65,28 @@ func (kg *rsaKeyGenerator) KeyGen(opts bccsp.KeyGenOpts) (bccsp.Key, error) {
 	}
 
 	return &rsaPrivateKey{lowLevelKey}, nil
+}
+
+type gmsm4KeyGenerator struct {
+}
+
+func (kg *gmsm4KeyGenerator) KeyGen(opts bccsp.KeyGenOpts) (bccsp.Key, error) {
+	lowLevelKey, err := GetRandomBytes(16)
+	if err != nil {
+		return nil, fmt.Errorf("Failed generating SM4 key [%s]", err)
+	}
+
+	return &gmsm4PrivateKey{lowLevelKey, false}, nil
+}
+
+type gmsm2KeyGenerator struct {
+}
+
+func (kg *gmsm2KeyGenerator) KeyGen(opts bccsp.KeyGenOpts) (bccsp.Key, error) {
+	lowLevelKey, err := sm2.GenerateKey()
+	if err != nil {
+		return nil, fmt.Errorf("Failed generating GMSM2 key [%s]", err)
+	}
+
+	return &gmsm2PrivateKey{lowLevelKey}, nil
 }

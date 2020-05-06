@@ -22,6 +22,7 @@ import (
 
 	"github.com/cloudflare/cfssl/helpers"
 	"github.com/cloudflare/cfssl/log"
+	gmx509 "github.com/zhigui-projects/x509"
 )
 
 // HardFail determines whether the failure to check the revocation
@@ -110,7 +111,6 @@ func fetchCRL(url string) (*pkix.CertificateList, error) {
 		return nil, err
 	}
 	resp.Body.Close()
-
 	return x509.ParseCRL(body)
 }
 
@@ -211,8 +211,11 @@ func fetchRemote(url string) (*x509.Certificate, error) {
 	if p != nil {
 		return helpers.ParseCertificatePEM(in)
 	}
-
-	return x509.ParseCertificate(in)
+	cert, err := x509.ParseCertificate(in)
+	if err !=nil{
+		cert, err = gmx509.X509(gmx509.SM2).ParseCertificate(in)
+	}
+	return cert ,err
 }
 
 var ocspOpts = ocsp.RequestOptions{

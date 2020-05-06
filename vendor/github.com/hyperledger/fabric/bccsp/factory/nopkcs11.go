@@ -70,7 +70,7 @@ func InitFactories(config *FactoryOpts) error {
 		}
 
 		var ok bool
-		DefaultBCCSP, ok = bccspMap[config.ProviderName]
+		defaultBCCSP, ok = bccspMap[config.ProviderName]
 		if !ok {
 			factoriesInitError = errors.Errorf("%s\nCould not find default `%s` BCCSP", factoriesInitError, config.ProviderName)
 		}

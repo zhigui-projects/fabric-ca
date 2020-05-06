@@ -88,7 +88,6 @@ func (s *ServerCmd) init() {
 		},
 	}
 	s.rootCmd = rootCmd
-
 	// initCmd represents the server init command
 	initCmd := &cobra.Command{
 		Use:   "init",
@@ -96,9 +95,11 @@ func (s *ServerCmd) init() {
 		Long:  "Generate the key material needed by the server if it doesn't already exist",
 	}
 	initCmd.RunE = func(cmd *cobra.Command, args []string) error {
+
 		if len(args) > 0 {
 			return errors.Errorf(extraArgsError, args, initCmd.UsageString())
 		}
+
 		err := s.getServer().Init(false)
 		if err != nil {
 			util.Fatal("Initialization failure: %s", err)
@@ -134,7 +135,9 @@ func (s *ServerCmd) init() {
 		},
 	}
 	s.rootCmd.AddCommand(versionCmd)
+
 	s.registerFlags()
+
 }
 
 // registerFlags registers command flags with viper

@@ -28,6 +28,7 @@ import (
 	"github.com/google/certificate-transparency-go"
 	"github.com/google/certificate-transparency-go/client"
 	"github.com/google/certificate-transparency-go/jsonclient"
+	gmx509 "github.com/zhigui-projects/x509"
 	"golang.org/x/net/context"
 	"time"
 )
@@ -118,16 +119,31 @@ func (s *Signer) sign(template *x509.Certificate, profile *config.SigningProfile
 		s.ca = template
 		initRoot = true
 	}
-
-	derBytes, err := x509.CreateCertificate(rand.Reader, template, s.ca, template.PublicKey, s.priv)
-	if err != nil {
-		return nil, cferr.Wrap(cferr.CertificateError, cferr.Unknown, err)
-	}
-	if initRoot {
-		s.ca, err = x509.ParseCertificate(derBytes)
+    var derBytes []byte
+	if log.IsGM {
+		derBytes, err = gmx509.X509(gmx509.SM2).CreateCertificate(rand.Reader, template, s.ca, template.PublicKey, s.priv)
 		if err != nil {
-			return nil, cferr.Wrap(cferr.CertificateError, cferr.ParseFailed, err)
+			return nil, cferr.Wrap(cferr.CertificateError, cferr.Unknown, err)
 		}
+		if initRoot {
+			s.ca, err = gmx509.X509(gmx509.SM2).ParseCertificate(derBytes)
+			if err != nil {
+				return nil, cferr.Wrap(cferr.CertificateError, cferr.ParseFailed, err)
+			}
+		}
+	} else {
+
+		derBytes, err = x509.CreateCertificate(rand.Reader, template, s.ca, template.PublicKey, s.priv)
+		if err != nil {
+			return nil, cferr.Wrap(cferr.CertificateError, cferr.Unknown, err)
+		}
+		if initRoot {
+			s.ca, err = x509.ParseCertificate(derBytes)
+			if err != nil {
+				return nil, cferr.Wrap(cferr.CertificateError, cferr.ParseFailed, err)
+			}
+		}
+
 	}
 
 	cert = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})

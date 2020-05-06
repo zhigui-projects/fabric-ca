@@ -21,6 +21,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	gmx509 "github.com/zhigui-projects/x509"
 	"net/url"
 	"os"
 	"path"
@@ -139,6 +140,9 @@ func storeCAChain(config *lib.ClientConfig, si *lib.GetCAInfoResponse) error {
 		}
 
 		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			cert, err =gmx509.X509(gmx509.SM2).ParseCertificate(block.Bytes)
+		}
 		if err != nil {
 			return errors.Wrap(err, "Failed to parse certificate in the CA chain")
 		}

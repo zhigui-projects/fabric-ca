@@ -191,6 +191,8 @@ caname:
 bccsp:
     default: SW
     sw:
+        algorithm: ECDSA
+#       algorithm: SM2        
         hash: SHA2
         security: 256
         filekeystore:

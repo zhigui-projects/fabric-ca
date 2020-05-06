@@ -9,6 +9,7 @@ SPDX-License-Identifier: Apache-2.0
 package util
 
 import (
+	"github.com/hyperledger/fabric-ca/gm"
 	"path"
 	"strings"
 
@@ -34,8 +35,14 @@ func ConfigureBCCSP(optsPtr **factory.FactoryOpts, mspDir, homeDir string) error
 		if opts.SwOpts == nil {
 			opts.SwOpts = &factory.SwOpts{}
 		}
-		if opts.SwOpts.HashFamily == "" {
-			opts.SwOpts.HashFamily = "SHA2"
+		if gm.IsGM(){
+			if opts.SwOpts.HashFamily == "" {
+				opts.SwOpts.HashFamily = "GMSM3"
+			}
+		}else{
+			if opts.SwOpts.HashFamily == "" {
+				opts.SwOpts.HashFamily = "SHA2"
+			}
 		}
 		if opts.SwOpts.SecLevel == 0 {
 			opts.SwOpts.SecLevel = 256

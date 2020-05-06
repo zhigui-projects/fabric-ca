@@ -16,7 +16,9 @@ limitations under the License.
 
 package main
 
-import "os"
+import (
+	"os"
+)
 
 var (
 	blockingStart = true
@@ -42,6 +44,7 @@ func RunMain(args []string) error {
 	scmd := NewCommand(cmdName, blockingStart)
 
 	// Execute the command
+
 	err := scmd.Execute()
 
 	// Restore original os.Args

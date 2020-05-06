@@ -21,6 +21,8 @@ import (
 	"github.com/cloudflare/cfssl/csr"
 	cferr "github.com/cloudflare/cfssl/errors"
 	"github.com/cloudflare/cfssl/info"
+	"github.com/zhigui-projects/gmsm/sm2"
+	gmx509 "github.com/zhigui-projects/x509"
 )
 
 // Subject contains the information that should be used to override the
@@ -158,6 +160,8 @@ func DefaultSigAlgo(priv crypto.Signer) x509.SignatureAlgorithm {
 		default:
 			return x509.ECDSAWithSHA1
 		}
+	case *sm2.PublicKey:
+		return gmx509.SM2WithSM3
 	default:
 		return x509.UnknownSignatureAlgorithm
 	}
@@ -166,18 +170,32 @@ func DefaultSigAlgo(priv crypto.Signer) x509.SignatureAlgorithm {
 // ParseCertificateRequest takes an incoming certificate request and
 // builds a certificate template from it.
 func ParseCertificateRequest(s Signer, csrBytes []byte) (template *x509.Certificate, err error) {
-	csrv, err := x509.ParseCertificateRequest(csrBytes)
-	if err != nil {
-		err = cferr.Wrap(cferr.CSRError, cferr.ParseFailed, err)
-		return
-	}
+	var csrv *x509.CertificateRequest
+	if s.SigAlgo() == gmx509.SM2WithSM3{
+		csrv, err = gmx509.X509(gmx509.SM2).ParseCertificateRequest(csrBytes)
+		if err != nil {
+			err = cferr.Wrap(cferr.CSRError, cferr.ParseFailed, err)
+			return
+		}
 
-	err = csrv.CheckSignature()
-	if err != nil {
-		err = cferr.Wrap(cferr.CSRError, cferr.KeyMismatch, err)
-		return
-	}
+		err = gmx509.X509(gmx509.SM2).CheckCertificateRequestSignature(csrv)
+		if err != nil {
+			err = cferr.Wrap(cferr.CSRError, cferr.KeyMismatch, err)
+			return
+		}
 
+	} else {
+		csrv, err = x509.ParseCertificateRequest(csrBytes)
+		if err != nil {
+			err = cferr.Wrap(cferr.CSRError, cferr.ParseFailed, err)
+			return
+		}
+		err = csrv.CheckSignature()
+		if err != nil {
+			err = cferr.Wrap(cferr.CSRError, cferr.KeyMismatch, err)
+			return
+		}
+	}
 	template = &x509.Certificate{
 		Subject:            csrv.Subject,
 		PublicKeyAlgorithm: csrv.PublicKeyAlgorithm,
@@ -221,7 +239,13 @@ type subjectPublicKeyInfo struct {
 // SubjectPublicKeyInfo component of the certificate.
 func ComputeSKI(template *x509.Certificate) ([]byte, error) {
 	pub := template.PublicKey
-	encodedPub, err := x509.MarshalPKIXPublicKey(pub)
+	var encodedPub []byte
+	var err error
+	if _,ok := pub.(*sm2.PublicKey); ok{
+		encodedPub, err = gmx509.X509(gmx509.SM2).MarshalPKIXPublicKey(pub)
+	} else {
+	    encodedPub, err = x509.MarshalPKIXPublicKey(pub)
+	}
 	if err != nil {
 		return nil, err
 	}

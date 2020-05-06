@@ -25,6 +25,9 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
+	"github.com/zhigui-projects/gmsm/sm2"
+	gmtls "github.com/zhigui-projects/tls"
+	gmx509 "github.com/zhigui-projects/x509"
 	"io/ioutil"
 	"strings"
 	_ "time" // for ocspSignerFromConfig
@@ -32,7 +35,6 @@ import (
 	_ "github.com/cloudflare/cfssl/cli" // for ocspSignerFromConfig
 	"github.com/cloudflare/cfssl/config"
 	"github.com/cloudflare/cfssl/csr"
-	"github.com/cloudflare/cfssl/helpers"
 	"github.com/cloudflare/cfssl/log"
 	_ "github.com/cloudflare/cfssl/ocsp" // for ocspSignerFromConfig
 	"github.com/cloudflare/cfssl/signer"
@@ -146,6 +148,8 @@ func getBCCSPKeyOpts(kr csr.KeyRequest, ephemeral bool) (opts bccsp.KeyGenOpts, 
 		default:
 			return nil, errors.Errorf("Invalid ECDSA key size: %d", kr.Size())
 		}
+	case "gmsm2", "GMSM2":
+		return &bccsp.GMSM2KeyGenOpts{Temporary:ephemeral}, nil
 	default:
 		return nil, errors.Errorf("Invalid algorithm: %s", kr.Algo())
 	}
@@ -188,7 +192,14 @@ func GetSignerFromCertFile(certFile string, csp bccsp.BCCSP) (bccsp.Key, crypto.
 		return nil, nil, nil, errors.Wrapf(err, "Could not read certFile '%s'", certFile)
 	}
 	// Parse certificate
-	parsedCa, err := helpers.ParseCertificatePEM(certBytes)
+	//parsedCa, err := helpers.ParseCertificatePEM(certBytes)
+	block, _ := pem.Decode(certBytes)
+	parsedCa, err := x509.ParseCertificate(block.Bytes)
+	//if GAlgorithm == "SM2" {
+	//if gm.IsGM(){
+	if err != nil {
+		parsedCa, err = gmx509.X509(gmx509.SM2).ParseCertificate(block.Bytes)
+	}
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -237,6 +248,18 @@ func ImportBCCSPKeyFromPEM(keyFile string, myCSP bccsp.BCCSP, temporary bool) (b
 			return nil, errors.WithMessage(err, fmt.Sprintf("Failed to import ECDSA private key for '%s'", keyFile))
 		}
 		return sk, nil
+	case *sm2.PrivateKey:
+
+		priv, err := sm2.MarshalSm2UnecryptedPrivateKey(key.(*sm2.PrivateKey))
+		if err != nil {
+			return nil, errors.WithMessage(err, fmt.Sprintf("Failed to convert SM2 private key for '%s'", keyFile))
+		}
+		sk, err := myCSP.KeyImport(priv, &bccsp.GMSM2PrivateKeyImportOpts{Temporary: temporary})
+		if err != nil {
+			return nil, errors.WithMessage(err, fmt.Sprintf("Failed to import SM2 private key for '%s'", keyFile))
+		}
+		return sk, nil
+
 	case *rsa.PrivateKey:
 		return nil, errors.Errorf("Failed to import RSA key from %s; RSA private key import is not supported", keyFile)
 	default:
@@ -285,6 +308,11 @@ func LoadX509KeyPair(certFile, keyFile string, csp bccsp.BCCSP) (*tls.Certificat
 	}
 
 	x509Cert, err := x509.ParseCertificate(cert.Certificate[0])
+	isGM := false
+	if err != nil {
+		x509Cert, err = gmx509.X509(gmx509.SM2).ParseCertificate(cert.Certificate[0])
+        isGM = true
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -294,7 +322,13 @@ func LoadX509KeyPair(certFile, keyFile string, csp bccsp.BCCSP) (*tls.Certificat
 		if keyFile != "" {
 			log.Debugf("Could not load TLS certificate with BCCSP: %s", err)
 			log.Debugf("Attempting fallback with certfile %s and keyfile %s", certFile, keyFile)
-			fallbackCerts, err := tls.LoadX509KeyPair(certFile, keyFile)
+			var fallbackCerts tls.Certificate
+			if isGM{
+				fallbackCerts, err = gmtls.LoadX509KeyPair(certFile, keyFile)
+			} else {
+			    fallbackCerts, err = tls.LoadX509KeyPair(certFile, keyFile)
+			}
+
 			if err != nil {
 				return nil, errors.Wrapf(err, "Could not get the private key %s that matches %s", keyFile, certFile)
 			}

@@ -10,6 +10,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/pem"
+	"github.com/zhigui-projects/gmsm/sm2"
 	"io/ioutil"
 
 	"github.com/cloudflare/cfssl/log"
@@ -25,6 +26,10 @@ type RevocationKey interface {
 	Store() error
 	// GetKey returns *ecdsa.PrivateKey that represents revocation public and private key pair
 	GetKey() *ecdsa.PrivateKey
+	// GetGmKey returns *sm2.PrivateKey that represents revocation public and private key pair
+	GetGmKey() *sm2.PrivateKey
+	// SetKey sets revocation public and private key
+	SetGmKey(key *sm2.PrivateKey)
 	// SetKey sets revocation public and private key
 	SetKey(key *ecdsa.PrivateKey)
 	// SetNewKey creates new revocation public and private key pair and sets them in this object
@@ -36,6 +41,7 @@ type caIdemixRevocationKey struct {
 	pubKeyFile     string
 	privateKeyFile string
 	key            *ecdsa.PrivateKey
+	gmkey          *sm2.PrivateKey
 	idemixLib      Lib
 }
 
@@ -77,11 +83,20 @@ func (rk *caIdemixRevocationKey) Load() error {
 // Store stores the CA's Idemix public and private key to the location
 // specified by pubKeyFile and secretKeyFile attributes, respectively
 func (rk *caIdemixRevocationKey) Store() error {
+
+	//var pk ecdsa.PrivateKey
+	//var gmpk sm2.PrivateKey
 	pk := rk.GetKey()
+
+//	if util.GAlgorithm == "GM2"{
+//		gmpk = rk.Ge
+//	}
 	if pk == nil {
 		return errors.New("Revocation key is not set")
 	}
 	pkBytes, pubKeyBytes, err := EncodeKeys(pk, &pk.PublicKey)
+
+
 	if err != nil {
 		return errors.WithMessage(err, "Failed to encode revocation public key")
 	}
@@ -112,8 +127,23 @@ func (rk *caIdemixRevocationKey) SetKey(key *ecdsa.PrivateKey) {
 	rk.key = key
 }
 
+// GetKey returns revocation key
+func (rk *caIdemixRevocationKey) GetGmKey() *sm2.PrivateKey {
+	return rk.gmkey
+}
+
+// SetKey sets revocation key
+func (rk *caIdemixRevocationKey) SetGmKey(key *sm2.PrivateKey) {
+	rk.gmkey = key
+}
+
 // SetNewKey creates new revocation key and sets it in this object
 func (rk *caIdemixRevocationKey) SetNewKey() (err error) {
+	rk.key, err = rk.idemixLib.GenerateLongTermRevocationKey()
+	return err
+}
+
+func (rk *caIdemixRevocationKey) SetNewGmKey() (err error) {
 	rk.key, err = rk.idemixLib.GenerateLongTermRevocationKey()
 	return err
 }

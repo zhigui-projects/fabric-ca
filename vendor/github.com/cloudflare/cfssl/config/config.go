@@ -30,6 +30,8 @@ import (
 // Since API clients are expected to be trusted, but CSRs are not, fields
 // provided through the API are not subject to whitelisting through this
 // mechanism.
+
+
 type CSRWhitelist struct {
 	Subject, PublicKeyAlgorithm, PublicKey, SignatureAlgorithm bool
 	DNSNames, IPAddresses, EmailAddresses                      bool

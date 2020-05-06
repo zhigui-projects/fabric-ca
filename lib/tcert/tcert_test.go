@@ -17,13 +17,14 @@ limitations under the License.
 package tcert
 
 import (
+	"github.com/hyperledger/fabric-ca/gm"
 	"testing"
 
 	"github.com/cloudflare/cfssl/log"
 	"github.com/hyperledger/fabric-ca/api"
 	"github.com/hyperledger/fabric-ca/util"
 )
-
+/*
 func TestTCertWithoutAttribute(t *testing.T) {
 
 	log.Level = log.LevelDebug
@@ -99,10 +100,66 @@ func TestTCertWitAttributes(t *testing.T) {
 	}
 
 }
+*/
+func TestGmTCertWitAttributes(t *testing.T) {
+
+	log.Level = log.LevelDebug
+    //util.GAlgorithm = "SM2"
+	gm.SetGM(true)
+    defer func(){
+		gm.SetGM(false)
+	}()
+    // Get a manager
+	mgr := getGmMgr(t)
+	if mgr == nil {
+		return
+	}
+
+	ecert, err := LoadCert("../../testdata/sm2_cert1.pem")
+	if err != nil {
+		return
+	}
+	var Attrs = []api.Attribute{
+		{
+			Name:  "SSN",
+			Value: "123-456-789",
+		},
+
+		{
+			Name:  "Income",
+			Value: "USD",
+		},
+	}
+	batchReq := &GetTCertBatchRequest{}
+	batchReq.Count = 2
+	batchReq.EncryptAttrs = true
+	batchReq.Attrs = Attrs
+	batchReq.PreKey = "anotherprekey"
+	resp, err := mgr.GetBatch(batchReq, ecert)
+	if err != nil {
+		t.Errorf("Error from GetBatch: %s", err)
+		return
+	}
+	if len(resp.TCerts) != 2 {
+		t.Errorf("Returned incorrect number of certs: expecting 2 but found %d", len(resp.TCerts))
+	}
+
+}
 
 func getMgr(t *testing.T) *Mgr {
 	keyFile := "../../testdata/ec-key.pem"
 	certFile := "../../testdata/ec.pem"
+	mgr, err := LoadMgr(keyFile, certFile, util.GetDefaultBCCSP())
+	if err != nil {
+		t.Errorf("failed loading mgr: %s", err)
+		return nil
+	}
+	return mgr
+}
+
+func getGmMgr(t *testing.T) *Mgr {
+	keyFile := "../../testdata/sm2-key1.pem"
+	certFile := "../../testdata/sm2-cert1.pem"
 	mgr, err := LoadMgr(keyFile, certFile, util.GetDefaultBCCSP())
 	if err != nil {
 		t.Errorf("failed loading mgr: %s", err)

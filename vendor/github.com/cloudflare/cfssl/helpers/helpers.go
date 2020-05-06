@@ -31,6 +31,9 @@ import (
 	cferr "github.com/cloudflare/cfssl/errors"
 	"github.com/cloudflare/cfssl/helpers/derhelpers"
 	"github.com/cloudflare/cfssl/log"
+	"github.com/zhigui-projects/gmsm/sm2"
+	gmtls "github.com/zhigui-projects/tls"
+	gmx509 "github.com/zhigui-projects/x509"
 	"golang.org/x/crypto/pkcs12"
 )
 
@@ -147,6 +150,8 @@ func SignatureString(alg x509.SignatureAlgorithm) string {
 		return "ECDSAWithSHA384"
 	case x509.ECDSAWithSHA512:
 		return "ECDSAWithSHA512"
+	case gmx509.SM2WithSM3:
+		return "SM2WithSM3"
 	default:
 		return "Unknown Signature"
 	}
@@ -180,6 +185,9 @@ func HashAlgoString(alg x509.SignatureAlgorithm) string {
 		return "SHA384"
 	case x509.ECDSAWithSHA512:
 		return "SHA512"
+	case gmx509.SM2WithSM3:
+		return "SM3"
+
 	default:
 		return "Unknown Hash Algorithm"
 	}
@@ -239,7 +247,10 @@ func ParseCertificatesDER(certsDER []byte, password string) (certs []*x509.Certi
 		if err != nil {
 			certs, err = x509.ParseCertificates(certsDER)
 			if err != nil {
-				return nil, nil, cferr.New(cferr.CertificateError, cferr.DecodeFailed)
+				certs,err = gmx509.X509(gmx509.SM2).ParseCertificates(certsDER)
+				if err != nil {
+				    return nil, nil, cferr.New(cferr.CertificateError, cferr.DecodeFailed)
+				}
 			}
 		} else {
 			key = pkcs12data.(crypto.Signer)
@@ -301,18 +312,21 @@ func ParseOneCertificateFromPEM(certsPEM []byte) ([]*x509.Certificate, []byte, e
 
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		pkcs7data, err := pkcs7.ParsePKCS7(block.Bytes)
+		cert,err = gmx509.X509(gmx509.SM2).ParseCertificate(block.Bytes)
 		if err != nil {
-			return nil, rest, err
+			pkcs7data, err := pkcs7.ParsePKCS7(block.Bytes)
+			if err != nil {
+				return nil, rest, err
+			}
+			if pkcs7data.ContentInfo != "SignedData" {
+				return nil, rest, errors.New("only PKCS #7 Signed Data Content Info supported for certificate parsing")
+			}
+			certs := pkcs7data.Content.SignedData.Certificates
+			if certs == nil {
+				return nil, rest, errors.New("PKCS #7 structure contains no certificates")
+			}
+			return certs, rest, nil
 		}
-		if pkcs7data.ContentInfo != "SignedData" {
-			return nil, rest, errors.New("only PKCS #7 Signed Data Content Info supported for certificate parsing")
-		}
-		certs := pkcs7data.Content.SignedData.Certificates
-		if certs == nil {
-			return nil, rest, errors.New("PKCS #7 structure contains no certificates")
-		}
-		return certs, rest, nil
 	}
 	var certs = []*x509.Certificate{cert}
 	return certs, rest, nil
@@ -338,13 +352,40 @@ func PEMToCertPool(pemCerts []byte) (*x509.CertPool, error) {
 	}
 
 	certPool := x509.NewCertPool()
-	if !certPool.AppendCertsFromPEM(pemCerts) {
+	//if !certPool.AppendCertsFromPEM(pemCerts) {
+	if !appendCertsFromPEM(certPool,pemCerts){
 		return nil, errors.New("failed to load cert pool")
 	}
 
 	return certPool, nil
 }
 
+func appendCertsFromPEM(certPool *x509.CertPool, pemCerts []byte)(ok bool) {
+	for len(pemCerts) > 0 {
+		var block *pem.Block
+		block, pemCerts = pem.Decode(pemCerts)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+			continue
+		}
+
+		cert, err := x509.ParseCertificate(block.Bytes)
+
+		if err != nil {
+			cert ,err = gmx509.X509(gmx509.SM2).ParseCertificate(block.Bytes)
+			if err != nil {
+		       	continue
+			}
+		}
+
+		certPool.AddCert(cert)
+		ok = true
+	}
+
+	return
+}
 // ParsePrivateKeyPEM parses and returns a PEM-encoded private
 // key. The private key may be either an unencrypted PKCS#8, PKCS#1,
 // or elliptic private key.
@@ -392,8 +433,16 @@ func ParseCSR(in []byte) (csr *x509.CertificateRequest, rest []byte, err error) 
 		}
 
 		csr, err = x509.ParseCertificateRequest(p.Bytes)
+		if err != nil {
+			csr ,err = gmx509.X509(gmx509.SM2).ParseCertificateRequest(p.Bytes)
+
+
+		}
 	} else {
 		csr, err = x509.ParseCertificateRequest(in)
+		if err != nil {
+			csr ,err = gmx509.X509(gmx509.SM2).ParseCertificateRequest(in)
+		}
 	}
 
 	if err != nil {
@@ -401,6 +450,9 @@ func ParseCSR(in []byte) (csr *x509.CertificateRequest, rest []byte, err error) 
 	}
 
 	err = csr.CheckSignature()
+	if err != nil{
+	    err = gmx509.X509(gmx509.SM2).CheckCertificateRequestSignature(csr)
+	}
 	if err != nil {
 		return nil, rest, err
 	}
@@ -417,6 +469,9 @@ func ParseCSRPEM(csrPEM []byte) (*x509.CertificateRequest, error) {
 		return nil, cferr.New(cferr.CSRError, cferr.DecodeFailed)
 	}
 	csrObject, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		csrObject, err = gmx509.X509(gmx509.SM2).ParseCertificateRequest(block.Bytes)
+	}
 
 	if err != nil {
 		return nil, err
@@ -451,6 +506,8 @@ func SignerAlgo(priv crypto.Signer) x509.SignatureAlgorithm {
 		default:
 			return x509.ECDSAWithSHA1
 		}
+	case *sm2.PublicKey:
+		return gmx509.SM2WithSM3
 	default:
 		return x509.UnknownSignatureAlgorithm
 	}
@@ -460,6 +517,9 @@ func SignerAlgo(priv crypto.Signer) x509.SignatureAlgorithm {
 func LoadClientCertificate(certFile string, keyFile string) (*tls.Certificate, error) {
 	if certFile != "" && keyFile != "" {
 		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+        if err != nil {
+        	cert,err = gmtls.LoadX509KeyPair(certFile, keyFile)
+		}
 		if err != nil {
 			log.Critical("Unable to read client certificate from file: %s or key from file: %s", certFile, keyFile)
 			return nil, err
