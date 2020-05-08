@@ -129,6 +129,7 @@ func newCA(caFile string, config *CAConfig, server *Server, renew bool) (*CA, er
 		return nil, err
 	}
 	return ca, nil
+
 }
 
 // initCA will initialize the passed in pointer to a CA struct

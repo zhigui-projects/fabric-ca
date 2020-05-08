@@ -8,17 +8,19 @@ import (
 	"crypto"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"github.com/zhigui-projects/gmsm/sm2"
+	"golang.org/x/crypto/ocsp"
 	"io"
 	"io/ioutil"
+	"math/big"
 	"net/http"
 	neturl "net/url"
 	"sync"
 	"time"
-
-	"golang.org/x/crypto/ocsp"
 
 	"github.com/cloudflare/cfssl/helpers"
 	"github.com/cloudflare/cfssl/log"
@@ -158,8 +160,15 @@ func certIsRevokedCRL(cert *x509.Certificate, url string) (revoked, ok bool) {
 		}
 
 		// check CRL signature
+
 		if issuer != nil {
-			err = issuer.CheckCRLSignature(crl)
+			_, isGM := issuer.PublicKey.(*sm2.PublicKey) ;
+			if isGM {
+				err = gmx509.CheckCRLSignature(issuer,crl)
+
+			} else {
+			    err = issuer.CheckCRLSignature(crl)
+			}
 			if err != nil {
 				log.Warningf("failed to verify CRL: %v", err)
 				return false, false
@@ -304,8 +313,12 @@ func sendOCSPRequest(server string, req []byte, leaf, issuer *x509.Certificate) 
 	case bytes.Equal(body, ocsp.SigRequredErrorResponse):
 		return nil, errors.New("OSCP signature required")
 	}
-
-	return ocsp.ParseResponseForCert(body, leaf, issuer)
+	_, isGM := issuer.PublicKey.(*sm2.PublicKey)
+	if isGM{
+		return ParseResponseForGMCert(body, leaf, issuer)
+	} else {
+	    return ocsp.ParseResponseForCert(body, leaf, issuer)
+	}
 }
 
 var crlRead = ioutil.ReadAll
@@ -327,4 +340,241 @@ var ocspRead = ioutil.ReadAll
 // SetOCSPFetcher sets the function to use to read from the http response body
 func SetOCSPFetcher(fn func(io.Reader) ([]byte, error)) {
 	ocspRead = fn
+}
+
+///////////////////////////new add ///////////////
+type certID struct {
+	HashAlgorithm pkix.AlgorithmIdentifier
+	NameHash      []byte
+	IssuerKeyHash []byte
+	SerialNumber  *big.Int
+}
+
+type responseASN1 struct {
+	Status   asn1.Enumerated
+	Response responseBytes `asn1:"explicit,tag:0,optional"`
+}
+
+type responseBytes struct {
+	ResponseType asn1.ObjectIdentifier
+	Response     []byte
+}
+
+type basicResponse struct {
+	TBSResponseData    responseData
+	SignatureAlgorithm pkix.AlgorithmIdentifier
+	Signature          asn1.BitString
+	Certificates       []asn1.RawValue `asn1:"explicit,tag:0,optional"`
+}
+
+type responseData struct {
+	Raw            asn1.RawContent
+	Version        int `asn1:"optional,default:0,explicit,tag:0"`
+	RawResponderID asn1.RawValue
+	ProducedAt     time.Time `asn1:"generalized"`
+	Responses      []singleResponse
+}
+
+type singleResponse struct {
+	CertID           certID
+	Good             asn1.Flag        `asn1:"tag:0,optional"`
+	Revoked          revokedInfo      `asn1:"tag:1,optional"`
+	Unknown          asn1.Flag        `asn1:"tag:2,optional"`
+	ThisUpdate       time.Time        `asn1:"generalized"`
+	NextUpdate       time.Time        `asn1:"generalized,explicit,tag:0,optional"`
+	SingleExtensions []pkix.Extension `asn1:"explicit,tag:1,optional"`
+}
+
+type revokedInfo struct {
+	RevocationTime time.Time       `asn1:"generalized"`
+	Reason         asn1.Enumerated `asn1:"explicit,tag:0,optional"`
+}
+var hashOIDs = map[crypto.Hash]asn1.ObjectIdentifier{
+	crypto.SHA1:   asn1.ObjectIdentifier([]int{1, 3, 14, 3, 2, 26}),
+	crypto.SHA256: asn1.ObjectIdentifier([]int{2, 16, 840, 1, 101, 3, 4, 2, 1}),
+	crypto.SHA384: asn1.ObjectIdentifier([]int{2, 16, 840, 1, 101, 3, 4, 2, 2}),
+	crypto.SHA512: asn1.ObjectIdentifier([]int{2, 16, 840, 1, 101, 3, 4, 2, 3}),
+	crypto.Hash(gmx509.SM3):    asn1.ObjectIdentifier([]int{1, 2, 156, 10197, 1, 401, 1}),
+}
+var idPKIXOCSPBasic = asn1.ObjectIdentifier([]int{1, 3, 6, 1, 5, 5, 7, 48, 1, 1})
+
+var signatureAlgorithmDetails = []struct {
+	algo       x509.SignatureAlgorithm
+	oid        asn1.ObjectIdentifier
+	pubKeyAlgo x509.PublicKeyAlgorithm
+	hash       crypto.Hash
+}{
+	{x509.MD2WithRSA, oidSignatureMD2WithRSA, x509.RSA, crypto.Hash(0) /* no value for MD2 */},
+	{x509.MD5WithRSA, oidSignatureMD5WithRSA, x509.RSA, crypto.MD5},
+	{x509.SHA1WithRSA, oidSignatureSHA1WithRSA, x509.RSA, crypto.SHA1},
+	{x509.SHA256WithRSA, oidSignatureSHA256WithRSA, x509.RSA, crypto.SHA256},
+	{x509.SHA384WithRSA, oidSignatureSHA384WithRSA, x509.RSA, crypto.SHA384},
+	{x509.SHA512WithRSA, oidSignatureSHA512WithRSA, x509.RSA, crypto.SHA512},
+	{x509.DSAWithSHA1, oidSignatureDSAWithSHA1, x509.DSA, crypto.SHA1},
+	{x509.DSAWithSHA256, oidSignatureDSAWithSHA256, x509.DSA, crypto.SHA256},
+	{x509.ECDSAWithSHA1, oidSignatureECDSAWithSHA1, x509.ECDSA, crypto.SHA1},
+	{x509.ECDSAWithSHA256, oidSignatureECDSAWithSHA256, x509.ECDSA, crypto.SHA256},
+	{x509.ECDSAWithSHA384, oidSignatureECDSAWithSHA384, x509.ECDSA, crypto.SHA384},
+	{x509.ECDSAWithSHA512, oidSignatureECDSAWithSHA512, x509.ECDSA, crypto.SHA512},
+	{gmx509.SM2WithSM3, oidSignatureSM2WithSM3, x509.ECDSA, crypto.Hash(gmx509.SM3)},
+}
+
+var (
+	oidSignatureMD2WithRSA      = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 2}
+	oidSignatureMD5WithRSA      = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 4}
+	oidSignatureSHA1WithRSA     = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 5}
+	oidSignatureSHA256WithRSA   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 11}
+	oidSignatureSHA384WithRSA   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 12}
+	oidSignatureSHA512WithRSA   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 13}
+	oidSignatureDSAWithSHA1     = asn1.ObjectIdentifier{1, 2, 840, 10040, 4, 3}
+	oidSignatureDSAWithSHA256   = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 3, 2}
+	oidSignatureECDSAWithSHA1   = asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 1}
+	oidSignatureECDSAWithSHA256 = asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 3, 2}
+	oidSignatureECDSAWithSHA384 = asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 3, 3}
+	oidSignatureECDSAWithSHA512 = asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 3, 4}
+	oidSignatureSM2WithSM3      = asn1.ObjectIdentifier{1, 2, 156, 10197, 1, 501}
+	oidSignatureSM2WithSHA1     = asn1.ObjectIdentifier{1, 2, 156, 10197, 1, 502}
+	oidSignatureSM2WithSHA256   = asn1.ObjectIdentifier{1, 2, 156, 10197, 1, 503}
+)
+func getSignatureAlgorithmFromOID(oid asn1.ObjectIdentifier) x509.SignatureAlgorithm {
+	for _, details := range signatureAlgorithmDetails {
+		if oid.Equal(details.oid) {
+			return details.algo
+		}
+	}
+	return x509.UnknownSignatureAlgorithm
+}
+func ParseResponseForGMCert(bytes []byte, cert, issuer *x509.Certificate) (*ocsp.Response, error) {
+	var resp responseASN1
+	rest, err := asn1.Unmarshal(bytes, &resp)
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) > 0 {
+		return nil, ocsp.ParseError("trailing data in OCSP response")
+	}
+
+	if status := ocsp.ResponseStatus(resp.Status); status != ocsp.Success {
+		return nil, ocsp.ResponseError{status}
+	}
+
+	if !resp.Response.ResponseType.Equal(idPKIXOCSPBasic) {
+		return nil, ocsp.ParseError("bad OCSP response type")
+	}
+
+	var basicResp basicResponse
+	rest, err = asn1.Unmarshal(resp.Response.Response, &basicResp)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(basicResp.Certificates) > 1 {
+		return nil, ocsp.ParseError("OCSP response contains bad number of certificates")
+	}
+
+	if n := len(basicResp.TBSResponseData.Responses); n == 0 || cert == nil && n > 1 {
+		return nil, ocsp.ParseError("OCSP response contains bad number of responses")
+	}
+
+	var singleResp singleResponse
+	if cert == nil {
+		singleResp = basicResp.TBSResponseData.Responses[0]
+	} else {
+		match := false
+		for _, resp := range basicResp.TBSResponseData.Responses {
+			if cert.SerialNumber.Cmp(resp.CertID.SerialNumber) == 0 {
+				singleResp = resp
+				match = true
+				break
+			}
+		}
+		if !match {
+			return nil, ocsp.ParseError("no response matching the supplied certificate")
+		}
+	}
+
+	ret := &ocsp.Response{
+		TBSResponseData:    basicResp.TBSResponseData.Raw,
+		Signature:          basicResp.Signature.RightAlign(),
+		SignatureAlgorithm: getSignatureAlgorithmFromOID(basicResp.SignatureAlgorithm.Algorithm),
+		Extensions:         singleResp.SingleExtensions,
+		SerialNumber:       singleResp.CertID.SerialNumber,
+		ProducedAt:         basicResp.TBSResponseData.ProducedAt,
+		ThisUpdate:         singleResp.ThisUpdate,
+		NextUpdate:         singleResp.NextUpdate,
+	}
+
+	// Handle the ResponderID CHOICE tag. ResponderID can be flattened into
+	// TBSResponseData once https://go-review.googlesource.com/34503 has been
+	// released.
+	rawResponderID := basicResp.TBSResponseData.RawResponderID
+	switch rawResponderID.Tag {
+	case 1: // Name
+		var rdn pkix.RDNSequence
+		if rest, err := asn1.Unmarshal(rawResponderID.Bytes, &rdn); err != nil || len(rest) != 0 {
+			return nil, ocsp.ParseError("invalid responder name")
+		}
+		ret.RawResponderName = rawResponderID.Bytes
+	case 2: // KeyHash
+		if rest, err := asn1.Unmarshal(rawResponderID.Bytes, &ret.ResponderKeyHash); err != nil || len(rest) != 0 {
+			return nil, ocsp.ParseError("invalid responder key hash")
+		}
+	default:
+		return nil, ocsp.ParseError("invalid responder id tag")
+	}
+
+	if len(basicResp.Certificates) > 0 {
+		ret.Certificate, err = gmx509.X509(gmx509.SM2).ParseCertificate(basicResp.Certificates[0].FullBytes)
+		if err != nil {
+			return nil, err
+		}
+
+//		if err := ret.CheckSignatureFrom(ret.Certificate); err != nil {
+		if err := CheckSignatureFrom(ret, ret.Certificate); err != nil {
+
+			return nil, ocsp.ParseError("bad signature on embedded certificate: " + err.Error())
+		}
+
+		if issuer != nil {
+			if err := gmx509.X509(gmx509.SM2).CheckCertSignature(issuer, ret.Certificate.SignatureAlgorithm, ret.Certificate.RawTBSCertificate, ret.Certificate.Signature); err != nil {
+				return nil, ocsp.ParseError("bad OCSP signature: " + err.Error())
+			}
+		}
+	} else if issuer != nil {
+		if err := CheckSignatureFrom(ret, issuer); err != nil {
+			return nil, ocsp.ParseError("bad OCSP signature: " + err.Error())
+		}
+	}
+
+	for _, ext := range singleResp.SingleExtensions {
+		if ext.Critical {
+			return nil, ocsp.ParseError("unsupported critical extension")
+		}
+	}
+
+	for h, oid := range hashOIDs {
+		if singleResp.CertID.HashAlgorithm.Algorithm.Equal(oid) {
+			ret.IssuerHash = h
+			break
+		}
+	}
+	if ret.IssuerHash == 0 {
+		return nil, ocsp.ParseError("unsupported issuer hash algorithm")
+	}
+
+	switch {
+	case bool(singleResp.Good):
+		ret.Status = ocsp.Good
+	case bool(singleResp.Unknown):
+		ret.Status = ocsp.Unknown
+	default:
+		ret.Status = ocsp.Revoked
+		ret.RevokedAt = singleResp.Revoked.RevocationTime
+		ret.RevocationReason = int(singleResp.Revoked.Reason)
+	}
+
+	return ret, nil
+}
+func CheckSignatureFrom(resp *ocsp.Response, issuer *x509.Certificate) error {
+	return  gmx509.X509(gmx509.SM2).CheckCertSignature(issuer,resp.SignatureAlgorithm, resp.TBSResponseData, resp.Signature)
 }
